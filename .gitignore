@@ -1,0 +1,52 @@
+# Secrets and key material — never commit
+/keys/
+/linux/keys/
+keys_backup_*/
+*.pem
+*.key
+hmac.bin
+.ssh-known-hosts
+id_rsa
+id_ed25519
+
+# Firmware, recovery, bootloader and signed artifacts
+/flash/
+/input/
+/output/
+/igyi3_*/
+/recovery/
+*.tar
+*.tar.md5
+*.img
+*.bin
+*.lz4
+*.zip
+*.ko
+*.o
+*.a
+
+# Build outputs and fetched dependencies
+build/
+sources/
+toolchains/
+out/*.img
+out/*.tar
+out/*.tar.md5
+out/*.bin
+baseline/parts/
+baseline/LOS_recovery.img
+baseline/LOS_recovery.rebuild.img
+baseline/trailer.bin
+
+# Logs and scratch
+logs/
+*.log
+*.tmp
+*.swp
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+
+# Keep the published fingerprint ledger
+!linux/out/SHA256SUMS

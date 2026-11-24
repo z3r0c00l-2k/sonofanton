@@ -1,0 +1,54 @@
+# r9s-linux baseline
+
+source tar          recovery/LOS_recovery.tar
+image               baseline/LOS_recovery.img
+image size          67108864
+image sha256        06bb5c2a0b363f4af16e027aa795b4f6655d7b3a0a4c2e8adc41875878ec4152
+
+## header
+version             2  (page 4096, header_size 1660)
+name                SRPUG16A018KU
+cmdline             'loop.max_part=7'
+kernel_addr         0x80080000
+ramdisk_addr        0x84000000
+tags_addr           0x80000000
+dtb_addr            0x8a000000
+id                  b8eaf7d1dbc8b7872d6522bc432125b92503133e000000000000000000000000
+id recomputed       match (header synthesis is exact)
+
+## parts (offset, size, sha256)
+kernel                   4096    30673408  aef139194ea41fe1f514f7a8a626ca8ea6546448f4e6561b3edb359f867aab82
+ramdisk              30679040    25129330  7d7cbc1cceaea91956485e389a1cd91e8beca109661bfa49a02a53d52c79b4c8
+second               55812096           0  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+recovery_dtbo        55812096      710656  d3dd8d285c677a2bbc08812c8ad458b4205cf174ce03be72fe27d7e2f551a269
+dtb                  56524800      397312  0048a76dee04e262deeae2063916286cb6824a040988cc02e7f8a012e70e200b
+trailer              56922112    10186752  (verbatim)
+
+## AVB (big-endian structs)
+footer offset       67108800
+original_image_size 56922112
+vbmeta offset/size  56922112 / 2240
+algorithm_type      2 (2 = SHA256_RSA4096, per BoardConfig test key)
+rollback_index      1
+
+Signed with the AOSP test key, which the fused device key does not trust,
+and the image boots. AVB verification is therefore off on this bootloader;
+modified images strip the trailer rather than carry a stale signature.
+
+## kernel config
+file                baseline/kernel.config
+lines               7600
+sha256              5e18e78b9dee20767092ca68a481558097faa8cb97a1065950959a1ef1867930
+olddefconfig        accepted by public tree; 74 changed lines, 7638 resolved
+
+## ramdisk
+compressed          25129330
+uncompressed        78316032
+sha256 (compressed) 7d7cbc1cceaea91956485e389a1cd91e8beca109661bfa49a02a53d52c79b4c8
+modules             271
+vermagic            5.4.302-g51d63cf4924c SMP preempt mod_unload modversions aarch64
+modules.load        271 lines
+
+## proof
+Unmodified repack: byte-identical (sha256 06bb5c2a0b363f4af16e027aa795b4f6655d7b3a0a4c2e8adc41875878ec4152)
+Header fields synthesised and id recomputed — the match proves header construction, not a copy.

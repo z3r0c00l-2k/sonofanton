@@ -1,0 +1,64 @@
+{
+  "source": "<work>/baseline/LOS_recovery.img",
+  "image_sha256": "06bb5c2a0b363f4af16e027aa795b4f6655d7b3a0a4c2e8adc41875878ec4152",
+  "kernel_size": 30673408,
+  "kernel_addr": 2148007936,
+  "ramdisk_size": 25129330,
+  "ramdisk_addr": 2214592512,
+  "second_size": 0,
+  "second_addr": 0,
+  "tags_addr": 2147483648,
+  "page_size": 4096,
+  "header_version": 2,
+  "total_size": 67108864,
+  "os_version": 536871335,
+  "name": "SRPUG16A018KU",
+  "cmdline": "loop.max_part=7",
+  "id": "b8eaf7d1dbc8b7872d6522bc432125b92503133e000000000000000000000000",
+  "extra_cmdline": "",
+  "recovery_dtbo_size": 710656,
+  "recovery_dtbo_offset": 55812096,
+  "header_size": 1660,
+  "dtb_size": 397312,
+  "dtb_addr": 2315255808,
+  "parts": {
+    "kernel": {
+      "size": 30673408,
+      "sha256": "aef139194ea41fe1f514f7a8a626ca8ea6546448f4e6561b3edb359f867aab82"
+    },
+    "ramdisk": {
+      "size": 25129330,
+      "sha256": "7d7cbc1cceaea91956485e389a1cd91e8beca109661bfa49a02a53d52c79b4c8"
+    },
+    "second": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recovery_dtbo": {
+      "size": 710656,
+      "sha256": "d3dd8d285c677a2bbc08812c8ad458b4205cf174ce03be72fe27d7e2f551a269"
+    },
+    "dtb": {
+      "size": 397312,
+      "sha256": "0048a76dee04e262deeae2063916286cb6824a040988cc02e7f8a012e70e200b"
+    }
+  },
+  "pad": 10186752,
+  "payload_end": 56922112,
+  "avb": {
+    "footer_offset": 67108800,
+    "version": "1.0",
+    "original_image_size": 56922112,
+    "vbmeta_offset": 56922112,
+    "vbmeta_size": 2240,
+    "header_version": "1.0",
+    "auth_block_size": 576,
+    "aux_block_size": 1408,
+    "algorithm_type": 2,
+    "rollback_index": 1,
+    "flags": 0,
+    "rollback_index_location": 0,
+    "structure_size": 2240
+  },
+  "trailer_size": 10186752
+}

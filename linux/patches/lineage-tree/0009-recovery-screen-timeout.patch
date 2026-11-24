@@ -1,0 +1,123 @@
+diff --git a/minui/graphics_drm.cpp b/minui/graphics_drm.cpp
+index bc73211..f94134d 100644
+--- a/minui/graphics_drm.cpp
++++ b/minui/graphics_drm.cpp
+@@ -191,6 +191,8 @@ void MinuiBackendDrm::Blank(bool blank, DrmConnector index) {
+     return;
+   }
+ 
++  blanked_ = blank;
++
+   if (blank) {
+     DrmDisableCrtc(drm_fd, drmInterface->monitor_crtc);
+   } else {
+@@ -432,6 +434,13 @@ GRSurface* MinuiBackendDrm::Flip() {
+     return nullptr;
+   }
+ 
++  if (blanked_) {
++    // The CRTC has no framebuffer while blanked, so a page flip would be rejected.
++    // Rotate the buffer anyway: the next unblank presents the newest content.
++    current_drm->current_buffer = 1 - current_drm->current_buffer;
++    return current_drm->GRSurfaceDrms[current_drm->current_buffer].get();
++  }
++
+   if (drmModePageFlip(drm_fd, current_drm->monitor_crtc->crtc_id,
+                       current_drm->GRSurfaceDrms[current_drm->current_buffer]->fb_id,
+                       DRM_MODE_PAGE_FLIP_EVENT, &ongoing_flip) != 0) {
+diff --git a/minui/graphics_drm.h b/minui/graphics_drm.h
+index a8c9886..ee87667 100644
+--- a/minui/graphics_drm.h
++++ b/minui/graphics_drm.h
+@@ -79,4 +79,7 @@ class MinuiBackendDrm : public MinuiBackend {
+ 
+   int drm_fd{ -1 };
+   DrmConnector active_display = DRM_MAIN;
++  // While the CRTC is disabled a page flip would be rejected, so Flip() only
++  // rotates buffers and the next Blank(false) restores the newest one.
++  bool blanked_{ false };
+ };
+diff --git a/recovery_ui/include/recovery_ui/ui.h b/recovery_ui/include/recovery_ui/ui.h
+index 1ed0a4e..40fe8e4 100644
+--- a/recovery_ui/include/recovery_ui/ui.h
++++ b/recovery_ui/include/recovery_ui/ui.h
+@@ -408,6 +408,9 @@ class RecoveryUI {
+   std::atomic<bool> input_thread_stopped_{ false };
+ 
+   ScreensaverState screensaver_state_;
++  // True while the idle timeout has the DRM CRTC disabled; the input that wakes
++  // the screen is consumed instead of being dispatched.
++  bool screen_blanked_{ false };
+ 
+   // The following two contain the absolute values computed from brightness_normal_ and
+   // brightness_dimmed_ respectively.
+diff --git a/recovery_ui/ui.cpp b/recovery_ui/ui.cpp
+index ead4c51..7597579 100644
+--- a/recovery_ui/ui.cpp
++++ b/recovery_ui/ui.cpp
+@@ -43,7 +43,9 @@
+ 
+ using namespace std::chrono_literals;
+ 
+-constexpr int UI_WAIT_KEY_TIMEOUT_SEC = 120;
++// r9s-linux: idle time before the screen is blanked. The panel has no brightness
++// node the AOSP screensaver can drive, so this is a straight off, not a dim.
++constexpr int UI_WAIT_KEY_TIMEOUT_SEC = 30;
+ constexpr const char* DEFAULT_BRIGHTNESS_FILE = "/sys/class/leds/lcd-backlight/brightness";
+ constexpr const char* DEFAULT_MAX_BRIGHTNESS_FILE = "/sys/class/leds/lcd-backlight/max_brightness";
+ constexpr const char* BRIGHTNESS_FILE_SDM = "/sys/class/backlight/panel0-backlight/brightness";
+@@ -608,32 +610,35 @@ RecoveryUI::InputEvent RecoveryUI::WaitInputEvent() {
+   }
+ 
+   // Time out after UI_WAIT_KEY_TIMEOUT_SEC, unless a USB cable is plugged in.
++  //
++  // r9s-linux: this panel exposes no brightness node the screensaver can use, so
++  // InitScreensaver() fails and the brightness path never armed -- the screen
++  // stayed lit forever. Blank the DRM CRTC instead, as TWRP's blanktimer does,
++  // and treat the next input as wake only: the event that brings the screen back
++  // is discarded so it cannot also operate the menu.
+   do {
+     bool rc = event_queue_cond.wait_for(lk, std::chrono::seconds(UI_WAIT_KEY_TIMEOUT_SEC), [this] {
+       return this->event_queue_len != 0 || key_interrupted_;
+     });
+     if (key_interrupted_) {
+-      SetScreensaverState(ScreensaverState::NORMAL);
++      if (screen_blanked_) {
++        gr_fb_blank(false);
++        screen_blanked_ = false;
++      }
+       return InputEvent(EventType::EXTRA, KeyError::INTERRUPTED);
+     }
+-    if (screensaver_state_ != ScreensaverState::DISABLED) {
+-      if (!rc) {
+-        // Must be after a timeout. Lower the brightness level: NORMAL -> DIMMED; DIMMED -> OFF.
+-        if (screensaver_state_ == ScreensaverState::NORMAL) {
+-          SetScreensaverState(ScreensaverState::DIMMED);
+-        } else if (screensaver_state_ == ScreensaverState::DIMMED) {
+-          SetScreensaverState(ScreensaverState::OFF);
+-        }
+-      } else if (screensaver_state_ != ScreensaverState::NORMAL) {
+-        // Drop the first key if it's changing from OFF to NORMAL.
+-        if (screensaver_state_ == ScreensaverState::OFF) {
+-          if (event_queue_len > 0) {
+-            memcpy(&event_queue[0], &event_queue[1], sizeof(int) * --event_queue_len);
+-          }
+-        }
+-
+-        // Reset the brightness to normal.
+-        SetScreensaverState(ScreensaverState::NORMAL);
++    if (!rc) {
++      if (!screen_blanked_) {
++        gr_fb_blank(true);
++        screen_blanked_ = true;
++        LOG(INFO) << "Screen blanked after " << UI_WAIT_KEY_TIMEOUT_SEC << "s idle";
++      }
++    } else if (screen_blanked_) {
++      gr_fb_blank(false);
++      screen_blanked_ = false;
++      LOG(INFO) << "Screen woken by input";
++      if (event_queue_len > 0) {
++        memmove(&event_queue[0], &event_queue[1], sizeof(InputEvent) * --event_queue_len);
+       }
+     }
+   } while (IsUsbConnected() && event_queue_len == 0);

@@ -1,0 +1,113 @@
+diff --git a/recovery_ui/include/recovery_ui/screen_ui.h b/recovery_ui/include/recovery_ui/screen_ui.h
+index 22be4fd..de3480c 100644
+--- a/recovery_ui/include/recovery_ui/screen_ui.h
++++ b/recovery_ui/include/recovery_ui/screen_ui.h
+@@ -540,6 +540,9 @@ class ScreenRecoveryUI : public RecoveryUI, public DrawInterface {
+   std::atomic<bool> batt_monitor_thread_stopped_{ false };
+   int32_t batt_capacity_;
+   bool charging_;
++  // r9s-linux: drawn next to the capacity; "eth0 1G", "Charging" and friends.
++  std::string eth_state_;
++  std::string charge_state_;
+ 
+   // Switch the display to active one after graphics is ready
+   bool is_graphics_available;
+diff --git a/recovery_ui/screen_ui.cpp b/recovery_ui/screen_ui.cpp
+index 2d9e6ec..09c9865 100644
+--- a/recovery_ui/screen_ui.cpp
++++ b/recovery_ui/screen_ui.cpp
+@@ -39,6 +39,7 @@
+ 
+ #include <aidl/android/hardware/health/BatteryStatus.h>
+ 
++#include <android-base/file.h>
+ #include <android-base/chrono_utils.h>
+ #include <android-base/logging.h>
+ #include <android-base/properties.h>
+@@ -892,6 +893,50 @@ void ScreenRecoveryUI::draw_menu_and_text_buffer_locked(
+ }
+ 
+ // Draws the battery capacity on the screen. Should only be called with updateMutex locked.
++namespace {
++
++// r9s-linux: recovery has no iproute2 and no view of the lease, so the header can
++// only report what sysfs knows about the hub's Ethernet device.
++std::string EthernetStateText() {
++  std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/sys/class/net"), closedir);
++  if (!dir) return "";
++  while (dirent* entry = readdir(dir.get())) {
++    std::string name = entry->d_name;
++    if (name.rfind("eth", 0) != 0) continue;
++    std::string base = "/sys/class/net/" + name;
++    std::string state;
++    if (!android::base::ReadFileToString(base + "/operstate", &state)) continue;
++    if (android::base::Trim(state) != "up") return name + " down";
++    std::string speed;
++    if (!android::base::ReadFileToString(base + "/speed", &speed)) return name + " up";
++    int mbps = atoi(android::base::Trim(speed).c_str());
++    if (mbps >= 1000) return name + " 1G";
++    if (mbps > 0) return name + " " + std::to_string(mbps) + "M";
++    return name + " up";
++  }
++  return "";
++}
++
++// "Paused" is the charge guard holding at the ceiling: the charger is attached
++// but the kernel reports NOT_CHARGING, which is otherwise indistinguishable from
++// a full battery in this row.
++std::string ChargeStateText(aidl::android::hardware::health::BatteryStatus status) {
++  switch (status) {
++    case aidl::android::hardware::health::BatteryStatus::CHARGING:
++      return "Charging";
++    case aidl::android::hardware::health::BatteryStatus::NOT_CHARGING:
++      return "Paused";
++    case aidl::android::hardware::health::BatteryStatus::DISCHARGING:
++      return "Discharging";
++    case aidl::android::hardware::health::BatteryStatus::FULL:
++      return "Full";
++    default:
++      return "";
++  }
++}
++
++}  // namespace
++
+ void ScreenRecoveryUI::draw_battery_capacity_locked() {
+   int x;
+   int y = margin_height_ + gr_get_height(lineage_logo_.get());
+@@ -944,6 +989,15 @@ void ScreenRecoveryUI::draw_battery_capacity_locked() {
+     SetColor(UIElement::INFO);
+     x -= batt_capacity.size() * char_width_;
+     DrawTextLine(x, icon_y, batt_capacity.c_str(), false);
++
++    // r9s-linux: link and charger state, right-aligned left of the capacity.
++    std::string status;
++    if (!eth_state_.empty()) status = eth_state_;
++    if (!charge_state_.empty()) status += (status.empty() ? "" : "  ") + charge_state_;
++    if (!status.empty()) {
++      x -= char_width_ + static_cast<int>(status.size()) * char_width_;
++      if (x > margin_width_) DrawTextLine(x, icon_y, status.c_str(), false);
++    }
+   }
+ }
+ 
+@@ -993,6 +1047,19 @@ void ScreenRecoveryUI::BattMonitorThreadLoop() {
+         redraw = true;
+       }
+ 
++      // r9s-linux: the icon alone cannot say whether the charger is paused at the
++      // guard ceiling, and the hub's link comes and goes with the cable.
++      std::string eth = EthernetStateText();
++      if (eth != eth_state_) {
++        eth_state_ = eth;
++        redraw = true;
++      }
++      std::string charge = ChargeStateText(charge_status);
++      if (charge != charge_state_) {
++        charge_state_ = charge;
++        redraw = true;
++      }
++
+       android::BatteryProperty prop;
+       android::base::Timer t;
+       android::status_t status;

@@ -1,0 +1,4 @@
+diff --git a/aidl/lineage_health/Android.bp b/aidl/lineage_health/Android.bp.disabled
+similarity index 100%
+rename from aidl/lineage_health/Android.bp
+rename to aidl/lineage_health/Android.bp.disabled

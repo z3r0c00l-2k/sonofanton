@@ -1,0 +1,41 @@
+name: code
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Host dependencies
+        run: python3 -m pip install -r requirements.txt
+      - name: Python syntax
+        run: python3 -m py_compile $(git ls-files '*.py')
+      - name: Shell syntax
+        run: |
+          files=$(git ls-files '*.sh')
+          if [ -n "$files" ]; then
+            for f in $files; do bash -n "$f"; done
+          fi
+          # The device helpers are POSIX sh with no .sh extension.
+          for f in linux/tools/device/charge-guard \
+                   linux/tools/device/net-watch \
+                   linux/tools/device/r9s-server \
+                   linux/tools/device/linux-launch; do
+            sh -n "$f"
+          done
+      - name: Host tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: .
+          severity: error

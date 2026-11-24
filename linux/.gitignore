@@ -1,0 +1,32 @@
+# Build outputs — regenerable from sources + config
+build/
+tools/host/
+__pycache__/
+*.pyc
+
+# Source clones — three repos, see README section 4
+sources/
+
+# Toolchains — 18 GB, fetched not committed (README section 4)
+toolchains/
+
+# Signing key — AOSP public test key; fetch with curl (README)
+keys/
+
+# Baseline payloads — 193 MB, regenerable from recovery/LOS_recovery.tar
+baseline/parts/
+baseline/trailer.bin
+baseline/LOS_recovery.img
+baseline/LOS_recovery.rebuild.img
+
+# Candidate images — 64 MB each; only their sha256 files are committed
+out/*.img
+out/*.tar
+out/*.tar.md5
+out/*.bin
+
+# artifact fingerprints are committed
+!out/SHA256SUMS
+
+# ssh host keys seen for the device (regenerated if the root is rebuilt)
+.ssh-known-hosts

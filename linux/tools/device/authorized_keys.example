@@ -1,0 +1,2 @@
+# Add your own SSH public key here at provisioning time.
+# ssh-ed25519 <your-public-key> you@host

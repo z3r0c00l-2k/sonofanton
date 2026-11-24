@@ -1,0 +1,128 @@
+diff --git a/recovery.cpp b/recovery.cpp
+index 44c7261..685e981 100644
+--- a/recovery.cpp
++++ b/recovery.cpp
+@@ -484,6 +484,25 @@ static bool AskToReboot(Device* device, Device::BuiltinAction chosen_action) {
+   return (chosen_item == 1);
+ }
+ 
++// r9s-linux: the Server menu only dispatches; /system/bin/r9s-server owns the
++// logic so the same verbs can be exercised from an adb shell. The output goes to
++// a file so the paging file viewer can show it on the graphical menu.
++static constexpr const char* kServerOutput = "/tmp/r9s-server.out";
++
++static void RunServerCommand(RecoveryUI* ui, const char* verb) {
++  std::string cmd = "/system/bin/r9s-server ";
++  cmd += verb;
++  cmd += " > ";
++  cmd += kServerOutput;
++  cmd += " 2>&1";
++
++  if (system(cmd.c_str()) == -1) {
++    ui->Print("Could not run %s\n", cmd.c_str());
++    return;
++  }
++  ui->ShowFile(kServerOutput);
++}
++
+ // Shows the recovery UI and waits for user input. Returns one of the device builtin actions, such
+ // as REBOOT, SHUTDOWN, or REBOOT_BOOTLOADER. Returning NO_ACTION means to take the default, which
+ // is to reboot or shutdown depending on if the --shutdown_after flag was passed to recovery.
+@@ -540,8 +559,25 @@ change_menu:
+       case Device::MENU_BASE:
+       case Device::MENU_WIPE:
+       case Device::MENU_ADVANCED:
++      case Device::MENU_SERVER:
+         goto change_menu;
+ 
++      case Device::SERVER_STATUS:
++        RunServerCommand(ui, "status");
++        break;
++
++      case Device::SERVER_START:
++        RunServerCommand(ui, "start");
++        break;
++
++      case Device::SERVER_STOP:
++        RunServerCommand(ui, "stop");
++        break;
++
++      case Device::SERVER_LOGS:
++        RunServerCommand(ui, "logs");
++        break;
++
+       case Device::REBOOT_FROM_FASTBOOT:    // Can not happen
+       case Device::SHUTDOWN_FROM_FASTBOOT:  // Can not happen
+       case Device::NO_ACTION:
+diff --git a/recovery_ui/device.cpp b/recovery_ui/device.cpp
+index db357d7..cbc0278 100644
+--- a/recovery_ui/device.cpp
++++ b/recovery_ui/device.cpp
+@@ -30,15 +30,28 @@
+ typedef std::pair<std::string, Device::BuiltinAction> menu_action_t;
+ 
+ static std::vector<std::string> g_main_header{};
++// r9s-linux: the first screen carries only what normal operation needs. Server
++// control, updates and factory reset live under Advanced so a stray selection on
++// the top screen cannot wipe the machine.
+ static std::vector<menu_action_t> g_main_actions{
+-  { "Reboot system now", Device::REBOOT },
+-  { "Apply update", Device::APPLY_UPDATE },
+-  { "Factory reset", Device::MENU_WIPE },
++  { "Status", Device::SERVER_STATUS },
+   { "Advanced", Device::MENU_ADVANCED },
++  { "Reboot system now", Device::REBOOT },
++};
++
++static std::vector<std::string> g_server_header{ "Server" };
++static std::vector<menu_action_t> g_server_actions{
++  { "Status", Device::SERVER_STATUS },
++  { "Start server", Device::SERVER_START },
++  { "Stop server", Device::SERVER_STOP },
++  { "View server log", Device::SERVER_LOGS },
+ };
+ 
+ static std::vector<std::string> g_advanced_header{ "Advanced options" };
+ static std::vector<menu_action_t> g_advanced_actions{
++  { "Server", Device::MENU_SERVER },
++  { "Apply update", Device::APPLY_UPDATE },
++  { "Factory reset", Device::MENU_WIPE },
+   { "Enter fastboot", Device::ENTER_FASTBOOT },
+   { "Reboot to bootloader", Device::REBOOT_BOOTLOADER },
+   { "Reboot to recovery", Device::REBOOT_RECOVERY },
+@@ -105,6 +118,8 @@ const std::vector<std::string>& Device::GetMenuHeaders() {
+       return g_wipe_header;
+   if (current_menu_ == &g_advanced_actions)
+       return g_advanced_header;
++  if (current_menu_ == &g_server_actions)
++      return g_server_header;
+   return g_main_header;
+ }
+ 
+@@ -119,6 +134,9 @@ Device::BuiltinAction Device::InvokeMenuItem(size_t menu_position) {
+       case Device::BuiltinAction::MENU_ADVANCED:
+         current_menu_ = &g_advanced_actions;
+         break;
++      case Device::BuiltinAction::MENU_SERVER:
++        current_menu_ = &g_server_actions;
++        break;
+       default:
+         break;
+     }
+diff --git a/recovery_ui/include/recovery_ui/device.h b/recovery_ui/include/recovery_ui/device.h
+index d33bda2..dc36f22 100644
+--- a/recovery_ui/include/recovery_ui/device.h
++++ b/recovery_ui/include/recovery_ui/device.h
+@@ -76,6 +76,12 @@ class Device {
+     MENU_BASE = 200,
+     MENU_WIPE = 202,
+     MENU_ADVANCED = 203,
++    MENU_SERVER = 204,
++    // r9s-linux: the Server menu dispatches to /system/bin/r9s-server.
++    SERVER_STATUS = 205,
++    SERVER_START = 206,
++    SERVER_STOP = 207,
++    SERVER_LOGS = 208,
+   };
+ 
+   explicit Device(RecoveryUI* ui);

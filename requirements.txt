@@ -1,0 +1,8 @@
+# Host-side tooling for the unlock and verification scripts.
+# Device-only paths do not need these.
+
+# verify_chain.py disassembles AArch64 for the patch contracts.
+capstone>=5,<6
+
+# eub_session*.py talks to the BootROM over USB.
+pyusb>=1.2,<2

@@ -1,0 +1,12 @@
+# Gitleaks allowlist.
+#
+# The two files below reference the AOSP public test key path
+# (`keys/testkey_rsa4096.pem`) when invoking avbtool. That is a path, not a
+# credential, and the same false positive appears in the imported r9s-linux
+# history before the inline allow comments were added.
+[allowlist]
+  description = "AOSP public test key path is not a secret"
+  paths = [
+    '''.*repack\.py$''',
+    '''.*make_gui_image\.py$''',
+  ]

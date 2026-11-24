@@ -1,0 +1,22 @@
+diff --git a/kernel/cgroup/cpuset.c b/kernel/cgroup/cpuset.c
+index db26d6316..424123c9e 100644
+--- a/kernel/cgroup/cpuset.c
++++ b/kernel/cgroup/cpuset.c
+@@ -165,7 +165,16 @@ struct cpuset {
+ 	int child_ecpus_count;
+ };
+ 
+-#define CS_CGROUP_COUNT	20
++/*
++ * The vendor build limits the number of cpuset groups per boot.  cs_count is
++ * never decremented (cpuset_css_free does not lower it), and every cgroup
++ * created under a parent with cpuset enabled consumes one slot.  Recovery mode
++ * plus a container host (Docker/buildkit create and destroy cgroups
++ * continuously) exhausted the stock limit of 20 and then every mkdir failed
++ * with -ENOMEM.  requested_cs[] is indexed by css->id - 1, so the array and the
++ * limit must stay in lockstep; root css is id 1 and non-root ids start at 2.
++ */
++#define CS_CGROUP_COUNT	256
+ static struct cpuset requested_cs[CS_CGROUP_COUNT];
+ static int cs_count;
+ 

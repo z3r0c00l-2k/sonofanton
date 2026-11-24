@@ -1,0 +1,91 @@
+diff --git a/drivers/gpu/arm/bv_r38p0/Makefile b/drivers/gpu/arm/bv_r38p0/Makefile
+index ab71516ba..ebfa0050a 100644
+--- a/drivers/gpu/arm/bv_r38p0/Makefile
++++ b/drivers/gpu/arm/bv_r38p0/Makefile
+@@ -229,7 +229,7 @@ EXTRA_CFLAGS += -DCONFIG_MALI_PLATFORM_NAME=$(CONFIG_MALI_PLATFORM_NAME)
+ 
+ # The following were added to align with W=1 in scripts/Makefile.extrawarn
+ # from the Linux source tree
+-KBUILD_CFLAGS += -Wall -Werror
++KBUILD_CFLAGS += -Wall 
+ KBUILD_CFLAGS += -Wextra -Wunused -Wno-unused-parameter
+ KBUILD_CFLAGS += -Wmissing-declarations
+ KBUILD_CFLAGS += -Wmissing-format-attribute
+diff --git a/drivers/gpu/arm/bv_r38p1/Makefile b/drivers/gpu/arm/bv_r38p1/Makefile
+index ab71516ba..ebfa0050a 100644
+--- a/drivers/gpu/arm/bv_r38p1/Makefile
++++ b/drivers/gpu/arm/bv_r38p1/Makefile
+@@ -229,7 +229,7 @@ EXTRA_CFLAGS += -DCONFIG_MALI_PLATFORM_NAME=$(CONFIG_MALI_PLATFORM_NAME)
+ 
+ # The following were added to align with W=1 in scripts/Makefile.extrawarn
+ # from the Linux source tree
+-KBUILD_CFLAGS += -Wall -Werror
++KBUILD_CFLAGS += -Wall 
+ KBUILD_CFLAGS += -Wextra -Wunused -Wno-unused-parameter
+ KBUILD_CFLAGS += -Wmissing-declarations
+ KBUILD_CFLAGS += -Wmissing-format-attribute
+diff --git a/drivers/net/wireless/broadcom/bcmdhd_101_10/Makefile b/drivers/net/wireless/broadcom/bcmdhd_101_10/Makefile
+index bac69a11a..be4f97857 100644
+--- a/drivers/net/wireless/broadcom/bcmdhd_101_10/Makefile
++++ b/drivers/net/wireless/broadcom/bcmdhd_101_10/Makefile
+@@ -24,7 +24,7 @@
+ #####################
+ 
+ DHDCFLAGS += -DBCMUTILS_ERR_CODES -DUSE_NEW_RSPEC_DEFS
+-DHDCFLAGS += -Wall -Werror -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
++DHDCFLAGS += -Wall  -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
+         -DBCMDONGLEHOST -DUNRELEASEDCHIP -DBCMDMA32 -DBCMFILEIMAGE      \
+         -DDHDTHREAD -DDHD_BCMEVENTS -DSHOW_EVENTS -DWLP2P      \
+         -DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT -DKEEP_ALIVE -DCSCAN     \
+diff --git a/drivers/net/wireless/broadcom/bcmdhd_101_16/Makefile b/drivers/net/wireless/broadcom/bcmdhd_101_16/Makefile
+index 036a43b34..ffbdc27b4 100644
+--- a/drivers/net/wireless/broadcom/bcmdhd_101_16/Makefile
++++ b/drivers/net/wireless/broadcom/bcmdhd_101_16/Makefile
+@@ -24,7 +24,7 @@
+ #####################
+ 
+ DHDCFLAGS += -DBCMUTILS_ERR_CODES -DUSE_NEW_RSPEC_DEFS
+-DHDCFLAGS += -Wall -Werror -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
++DHDCFLAGS += -Wall  -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
+         -DBCMDONGLEHOST -DUNRELEASEDCHIP -DBCMDMA32 -DBCMFILEIMAGE      \
+         -DDHDTHREAD -DDHD_BCMEVENTS -DSHOW_EVENTS -DWLP2P      \
+         -DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT -DKEEP_ALIVE -DCSCAN     \
+diff --git a/drivers/net/wireless/broadcom/bcmdhd_101_18/Makefile b/drivers/net/wireless/broadcom/bcmdhd_101_18/Makefile
+index dca338b2d..a417a079f 100644
+--- a/drivers/net/wireless/broadcom/bcmdhd_101_18/Makefile
++++ b/drivers/net/wireless/broadcom/bcmdhd_101_18/Makefile
+@@ -24,7 +24,7 @@
+ #####################
+ 
+ DHDCFLAGS += -DBCMUTILS_ERR_CODES -DUSE_NEW_RSPEC_DEFS
+-DHDCFLAGS += -Wall -Werror -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
++DHDCFLAGS += -Wall  -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER      \
+         -DBCMDONGLEHOST -DUNRELEASEDCHIP -DBCMDMA32 -DBCMFILEIMAGE      \
+         -DDHDTHREAD -DDHD_BCMEVENTS -DSHOW_EVENTS -DWLP2P      \
+         -DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT -DKEEP_ALIVE -DCSCAN     \
+diff --git a/drivers/sensors/vl53l5/Makefile b/drivers/sensors/vl53l5/Makefile
+index bb4fe59eb..430f3abc2 100644
+--- a/drivers/sensors/vl53l5/Makefile
++++ b/drivers/sensors/vl53l5/Makefile
+@@ -70,7 +70,7 @@ ccflags-y	+= -I$(srctree)/drivers/sensors/vl53l5/bare_driver/api/inc
+ ccflags-y	+= -I$(srctree)/drivers/sensors/vl53l5/bare_driver/dci/inc
+ ccflags-y	+= -I$(srctree)/drivers/sensors/vl53l5/platform/inc
+ ccflags-y	+= -I$(srctree)/drivers/sensors/vl53l5/algo/inc
+-ccflags-y	+= -Wall -Werror -Wno-missing-braces
++ccflags-y	+= -Wall  -Wno-missing-braces
+ 
+ ifeq "$(OFFSET_CAL_ENABLE)" "TRUE"
+   $(warning OFFSET_CAL_ENABLE=$(OFFSET_CAL_ENABLE))
+diff --git a/sound/soc/codecs/tfa9874/Makefile b/sound/soc/codecs/tfa9874/Makefile
+index ac48ce9c0..14fe9e385 100644
+--- a/sound/soc/codecs/tfa9874/Makefile
++++ b/sound/soc/codecs/tfa9874/Makefile
+@@ -13,7 +13,7 @@ TFA_SRC_DIR              =$(srctree)/$(src)
+ ccflags-y               := -DDEBUG
+ ccflags-y               += -DTFA98XX_GIT_VERSIONS
+ ccflags-y               += -I$(TFA_SRC_DIR)/inc
+-ccflags-y               += -Werror
++ccflags-y               += 
+ #ccflags-y               += -DTFA_DEBUG
+ 
+ EXTRA_CFLAGS += -I$(TFA_SRC_DIR)/inc

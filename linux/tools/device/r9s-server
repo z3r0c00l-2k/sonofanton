@@ -1,0 +1,240 @@
+#!/system/bin/sh
+# r9s-server - status and control for the r9s-linux server.
+#
+# Used by the recovery Server menu, and usable from an adb shell:
+#
+#   r9s-server status | start | stop | logs
+#
+# The server is Debian running from userdata in its own mount namespace (the
+# PID namespace is shared with recovery so Docker can create user namespaces).
+# /system/bin/linux-launch performs the pivot; "stop" terminates dockerd first
+# (which stops its containers) and then sshd.
+
+DATA=/dev/block/by-name/userdata
+ROOT=/data/linux/data/debian
+LOG=/data/r9s-linux.log
+CEILING=80
+BAT=/sys/class/power_supply/battery
+
+# Match the command name, not argv[0]: OpenSSH rewrites argv[0] to
+# "sshd: /usr/sbin/sshd -D -e [listener] ...", so toybox pidof, which compares
+# argv[0], never finds the listener even though comm stays "sshd".
+sshd_pids() { pgrep -x sshd 2>/dev/null; }
+# dockerd keeps comm "dockerd"; match it, not the shell that started it.
+dockerd_pids() { pgrep -x dockerd 2>/dev/null; }
+guard_running() { pgrep -f /system/bin/charge-guard >/dev/null 2>&1; }
+
+ensure_data() {
+    mkdir -p /data 2>/dev/null
+    grep -q " /data f2fs " /proc/mounts 2>/dev/null && return 0
+    mount -t f2fs "$DATA" /data 2>/dev/null
+}
+
+# sshd binds 0.0.0.0:22 -> 00000000:0016 in /proc/net/tcp{,6}
+listening() {
+    grep -q ":0016 " /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+# tenths of a degree -> "34.0", without awk
+degc() {
+    v="$1"
+    w="${v%?}"
+    f="${v#"$w"}"
+    [ -z "$w" ] && { echo "$v"; return; }
+    echo "$w.$f"
+}
+
+status() {
+    echo "r9s-linux server"
+    echo
+    ensure_data
+
+    pids="$(sshd_pids)"
+    if [ -n "$pids" ]; then
+        echo "  server        running (sshd pid $pids)"
+    else
+        echo "  server        stopped"
+    fi
+
+    if listening; then
+        echo "  ssh           listening on port 22"
+    else
+        echo "  ssh           not listening"
+    fi
+
+    # A USB-C hub makes the phone host and replaces USB adb with an Ethernet
+    # device, so this line is also the quickest answer to "why did adb go away".
+    link=""
+    for n in /sys/class/net/eth*; do
+        [ -e "$n" ] || continue
+        link=${n##*/}
+        break
+    done
+    if [ -n "$link" ]; then
+        line="  ethernet      $link"
+        if [ "$(cat /sys/class/net/$link/carrier 2>/dev/null)" = 1 ]; then
+            line="$line  link up"
+        else
+            line="$line  no carrier"
+        fi
+        speed="$(cat /sys/class/net/$link/speed 2>/dev/null)"
+        [ -n "$speed" ] && line="$line  ${speed} Mb/s"
+        addr="$(ifconfig "$link" 2>/dev/null | grep 'inet addr' | cut -d: -f2 | cut -d' ' -f1)"
+        [ -n "$addr" ] && line="$line  $addr"
+        echo "$line"
+    else
+        echo "  ethernet      no USB host link (hub unplugged)"
+    fi
+
+    if [ -x "$ROOT/usr/sbin/sshd" ]; then
+        echo "  root          $ROOT"
+    else
+        echo "  root          MISSING - $ROOT"
+    fi
+
+    cap="$(cat $BAT/capacity 2>/dev/null)"
+    st="$(cat $BAT/status 2>/dev/null)"
+    cur="$(cat $BAT/current_now 2>/dev/null)"
+    en="$(cat $BAT/charging_enabled 2>/dev/null)"
+    line="  battery       ${cap:-?}%  ${st:-?}"
+    [ -n "$cur" ] && line="$line  ${cur} mA"
+    if [ "$en" = "1" ]; then
+        line="$line  charging allowed"
+    elif [ "$en" = "0" ]; then
+        line="$line  charging held"
+    fi
+    echo "$line"
+
+    tp="$(cat $BAT/temp 2>/dev/null)"
+    if [ -n "$tp" ] && [ "$tp" -gt 0 ] 2>/dev/null; then
+        echo "  temperature   $(degc "$tp") C"
+    fi
+
+    if guard_running; then
+        echo "  charge guard  running (ceiling ${CEILING}%)"
+    else
+        echo "  charge guard  not running"
+    fi
+
+    read up _ < /proc/uptime
+    up="${up%.*}"
+    if [ -n "$up" ] 2>/dev/null; then
+        d=$((up / 86400)); h=$(((up % 86400) / 3600)); m=$(((up % 3600) / 60))
+        echo "  uptime        ${d}d ${h}h ${m}m   load $(cut -d' ' -f1-3 /proc/loadavg)"
+    fi
+
+    if grep -q " /data f2fs " /proc/mounts 2>/dev/null; then
+        echo "  storage       $(df -h /data 2>/dev/null | tail -n 1)"
+    fi
+
+    if [ -f "$LOG" ]; then
+        echo
+        echo "  last log      $(tail -n 1 "$LOG" 2>/dev/null)"
+    fi
+}
+
+start() {
+    pids="$(sshd_pids)"
+    if [ -n "$pids" ]; then
+        echo "Server is already running (sshd pid $pids)."
+        return 0
+    fi
+
+    ensure_data
+    if [ ! -x "$ROOT/usr/sbin/sshd" ]; then
+        echo "No Debian root at $ROOT - nothing to start."
+        return 1
+    fi
+
+    echo "Starting the server..."
+    setsid /system/bin/linux-launch >/dev/null 2>&1 &
+
+    i=0
+    while [ "$i" -lt 15 ]; do
+        sleep 1
+        pids="$(sshd_pids)"
+        if [ -n "$pids" ]; then
+            echo
+            echo "Running (sshd pid $pids), listening on port 22."
+            return 0
+        fi
+        i=$((i + 1))
+    done
+
+    echo
+    echo "No sshd after 15s. Last log lines:"
+    echo
+    tail -n 15 "$LOG" 2>/dev/null
+    return 1
+}
+
+stop() {
+    pids="$(sshd_pids)"
+    if [ -z "$pids" ]; then
+        echo "Server is not running."
+        return 0
+    fi
+
+    # sshd is no longer PID 1 of a private PID namespace, so stopping it does
+    # not take the containers with it. Stop dockerd first (it tears its
+    # containers down), then sshd.
+    dpids="$(dockerd_pids)"
+    if [ -n "$dpids" ]; then
+        echo "Stopping dockerd (pid $dpids)..."
+        kill -TERM $dpids 2>/dev/null
+        i=0
+        while [ "$i" -lt 30 ] && [ -n "$(dockerd_pids)" ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+        dpids="$(dockerd_pids)"
+        [ -n "$dpids" ] && kill -KILL $dpids 2>/dev/null
+        if [ -n "$(dockerd_pids)" ]; then
+            echo "dockerd still running: $(dockerd_pids)"
+        fi
+    fi
+
+    echo "Stopping sshd (pid $pids)..."
+    kill -TERM $pids 2>/dev/null
+
+    i=0
+    while [ "$i" -lt 10 ] && [ -n "$(sshd_pids)" ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+
+    pids="$(sshd_pids)"
+    if [ -n "$pids" ]; then
+        kill -KILL $pids 2>/dev/null
+        sleep 1
+    fi
+
+    if [ -n "$(sshd_pids)" ]; then
+        echo "Still running: $(sshd_pids)"
+        return 1
+    fi
+
+    echo
+    echo "Stopped. userdata stays mounted and the charge guard keeps running."
+}
+
+logs() {
+    if [ ! -f "$LOG" ]; then
+        echo "No server log at $LOG yet."
+        return 0
+    fi
+    echo "== $LOG (last 200 lines) =="
+    echo
+    tail -n 200 "$LOG"
+}
+
+case "${1:-}" in
+    status) status ;;
+    start) start ;;
+    stop) stop ;;
+    logs) logs ;;
+    *)
+        echo "usage: r9s-server status|start|stop|logs"
+        exit 2
+        ;;
+esac

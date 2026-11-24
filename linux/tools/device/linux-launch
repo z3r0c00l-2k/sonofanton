@@ -1,0 +1,125 @@
+#!/system/bin/sh
+# r9s-linux launcher
+#
+# Runs once from the recovery init (service r9slinux). Mounts userdata and
+# starts the Linux root in its own mount namespace, with a real root, so
+# container runtimes work inside it. The recovery keeps its own root: pivot_root
+# is per mount namespace.
+#
+# No PID namespace here on purpose. Docker's userns-remap needs to create a
+# user namespace, and that fails for runc's nsexec when the daemon runs inside
+# the nested PID namespace this launcher used to create. Containers still get
+# their own PID namespace from runc; only sshd/dockerd share the recovery's.
+# r9s-server stop therefore tears dockerd down explicitly instead of relying on
+# "kill PID 1".
+#
+# The root must be a mount point for pivot_root; the helper binds it.
+# rootfs (the recovery's /) cannot be pivoted, so the helper binds it aside and
+# chroots into that bind first; Android marks the tree shared, so it is made
+# private before the pivot.
+
+DATA=/dev/block/by-name/userdata
+ROOT=/data/linux/data/debian
+LOG=/data/r9s-linux.log
+
+log() { echo "$(date -u +%H:%M:%S 2>/dev/null) r9s-linux: $*" >> "$LOG"; }
+
+mkdir -p /data
+if ! grep -q " /data f2fs " /proc/mounts; then
+    mount -t f2fs "$DATA" /data || { log "userdata mount failed"; exit 1; }
+fi
+[ -x "$ROOT/usr/sbin/sshd" ]    || { log "no sshd under $ROOT"; exit 1; }
+[ -x /system/bin/pivot_root ]   || { log "pivot_root helper missing"; exit 1; }
+
+# mounts the Linux root expects; they keep their meaning after the pivot
+mount -t proc proc "$ROOT/proc" 2>/dev/null
+mount --rbind /sys "$ROOT/sys"  2>/dev/null
+mount --rbind /dev "$ROOT/dev"  2>/dev/null
+mkdir -p "$ROOT/dev/shm"
+mount -t tmpfs tmpfs "$ROOT/dev/shm" 2>/dev/null
+
+# sshd refuses to start without its privilege separation directory
+mkdir -p "$ROOT/run/sshd"
+chmod 755 "$ROOT/run/sshd"
+
+# host keys are generated on first use; the authorized key is installed at
+# build time (keys/r9s-linux_ed25519.pub -> /root/.ssh/authorized_keys)
+chroot "$ROOT" /usr/bin/ssh-keygen -A 2>/dev/null
+
+# charge guard: hold the pack under the ceiling, independent of this session
+if [ -x /system/bin/charge-guard ]; then
+    setsid /system/bin/charge-guard >/dev/null 2>&1 &
+fi
+
+# network watcher: a USB-C hub takes the port into host mode and brings the
+# only uplink with it, after boot, so it has to be picked up when it appears
+if [ -x /system/bin/net-watch ]; then
+    setsid /system/bin/net-watch >/dev/null 2>&1 &
+fi
+
+log "starting Linux root $ROOT"
+
+# Boot entry inside the Linux root. Docker is started here because neither
+# half of its setup can happen outside: the v1 devices cgroup has to be
+# mounted after the pivot (kernel 5.4 has no device controller in cgroup v2).
+# There is no init system in the root, so nothing else would ever start it.
+#
+# The mount is skipped when the root has no dockerd (a minimal provision);
+# sshd must come up either way.
+exec unshare --mount --fork /system/bin/pivot_root "$ROOT" \
+    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root TERM=dumb \
+    /bin/sh -c '
+        # /proc was mounted before unshare; stack a private procfs for this
+        # mount namespace so the runtime never depends on the recovery mount
+        # tree (the PID namespace is shared, so PIDs already agree).
+        mount -t proc proc /proc
+
+        # Parent of sshd and dockerd: raise the fd limit for both, and for the
+        # container processes that inherit from the daemon (hard 4096 -> 1M).
+        ulimit -Hn 1048576 2>/dev/null
+        ulimit -Sn 1048576 2>/dev/null
+
+        # No init system, so the sysctls that matter to builds and servers are
+        # set here. They are global, not namespaced.
+        echo 1024 > /proc/sys/fs/inotify/max_user_instances 2>/dev/null
+        echo 1048576 > /proc/sys/fs/inotify/max_user_watches 2>/dev/null
+        echo 100 > /proc/sys/vm/swappiness 2>/dev/null
+        echo 0 > /proc/sys/vm/page-cluster 2>/dev/null
+
+        # zram is built into this kernel but ships no device node. 3 GiB of lz4
+        # compressed swap: fast, no flash wear, ~1-1.5 GiB of real RAM in use.
+        # Skipped when the device is already active (server restart, not boot).
+        if [ -e /sys/block/zram0/disksize ] && ! grep -q "^/dev/zram0" /proc/swaps 2>/dev/null; then
+            if [ ! -e /dev/zram0 ]; then
+                zdev=$(cat /sys/block/zram0/dev 2>/dev/null)
+                [ -n "$zdev" ] && mknod /dev/zram0 b "${zdev%:*}" "${zdev#*:}" 2>/dev/null
+            fi
+            if [ -e /dev/zram0 ]; then
+                if [ "$(cat /sys/block/zram0/disksize 2>/dev/null)" = 0 ]; then
+                    echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null
+                    echo 3G > /sys/block/zram0/disksize 2>/dev/null
+                fi
+                mkswap /dev/zram0 >/dev/null 2>&1 && swapon /dev/zram0 2>/dev/null
+            fi
+        fi
+
+        if command -v dockerd >/dev/null 2>&1; then
+            mkdir -p /sys/fs/cgroup/devices /var/log
+            mount -t cgroup -o devices devices /sys/fs/cgroup/devices 2>/dev/null
+            # Keep cpuset out of the container subtree. Every cgroup created
+            # under a parent that enables cpuset consumes one kernel cpuset
+            # slot (CS_CGROUP_COUNT); containers do not need cpuset. Best effort
+            # on a server restart, where old children may still hold it.
+            mkdir -p /sys/fs/cgroup/docker
+            echo -cpuset > /sys/fs/cgroup/docker/cgroup.subtree_control 2>/dev/null
+            # /run lives on userdata, so the previous namespace leaves a pidfile
+            # behind. A new namespace reuses low PIDs, so the stale number can
+            # name a live process and dockerd refuses to start. This entry is
+            # the only way the namespace is created, so no dockerd can be
+            # running here yet.
+            rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid
+            dockerd --data-root=/var/lib/docker \
+                --default-ulimit nofile=1048576:1048576 \
+                > /var/log/dockerd.log 2>&1 &
+        fi
+        exec /usr/sbin/sshd -D -e'

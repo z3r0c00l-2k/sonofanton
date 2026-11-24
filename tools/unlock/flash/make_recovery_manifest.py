@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Generate the read-only recovery provenance manifest.
+
+OpenSpec change: repair-bootloader-patch-contracts (tasks 4.1 / 4.2).
+
+Reads only. Produces flash/los_stage2/RECOVERY_MANIFEST.md with:
+  - one row per recovery-test image: SHA-256, source container/member,
+    Android boot header version, AVB flags (correctly at header 0x78);
+  - an explicit resolution (or unresolved-do-not-use marker) for the known
+    recovery.tar-vs-zip mismatch;
+  - the ROM's stated flash expectations, each citing its metadata source.
+
+Nothing here asserts runtime compatibility; it records provenance only.
+"""
+
+import hashlib
+import io
+import os
+import re
+import struct
+import tarfile
+import zipfile
+
+ZIP = "flash/lineage-23.2-20260904-UNOFFICIAL-r9s.zip"
+REC_TAR = "flash/los_stage2/recovery_vbmeta.tar"
+THREAD_REC_TAR = "flash/recovery.tar"
+OUT = "flash/los_stage2/RECOVERY_MANIFEST.md"
+
+ZIP_MEMBERS = ["boot.img", "recovery.img", "dtbo.img", "vendor_boot.img", "vbmeta.img"]
+
+
+def sha256(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def boot_info(d):
+    if d[:8] != b"ANDROID!":
+        return {"magic": d[:8].hex()}
+    return {
+        "magic": "ANDROID!",
+        "header_version": struct.unpack_from("<I", d, 0x28)[0],
+        "kernel_size": struct.unpack_from("<I", d, 0x08)[0],
+        "ramdisk_size": struct.unpack_from("<I", d, 0x10)[0],
+        "second_size": struct.unpack_from("<I", d, 0x18)[0],
+        "page_size": struct.unpack_from("<I", d, 0x24)[0],
+    }
+
+
+def vendor_boot_info(d):
+    if d[:8] != b"VNDRBOOT":
+        return {"magic": d[:8].hex()}
+    return {
+        "magic": "VNDRBOOT",
+        "header_version": struct.unpack_from("<I", d, 0x08)[0],
+        "page_size": struct.unpack_from("<I", d, 0x0C)[0],
+    }
+
+
+def dtbo_info(d):
+    return {"magic": d[:4].hex(), "size": len(d)}
+
+
+def vbmeta_info(d):
+    if d[:4] != b"AVB0":
+        return {"magic": d[:4].hex()}
+    return {
+        "magic": "AVB0",
+        "flags(0x78)": struct.unpack_from(">I", d, 0x78)[0],
+        "rollback_index_location(0x7c)": struct.unpack_from(">I", d, 0x7C)[0],
+        "auth_block_size(0x0c)": struct.unpack_from(">Q", d, 0x0C)[0],
+        "algorithm_type(0x1c)": struct.unpack_from(">I", d, 0x1C)[0],
+        "descriptors_size(0x68)": struct.unpack_from(">Q", d, 0x68)[0],
+    }
+
+
+def describe(data):
+    if data[:8] == b"ANDROID!":
+        return boot_info(data)
+    if data[:8] == b"VNDRBOOT":
+        return vendor_boot_info(data)
+    if data[:4] == b"AVB0":
+        return vbmeta_info(data)
+    return dtbo_info(data)
+
+
+def main():
+    rows = []
+    blobs = {}
+
+    with zipfile.ZipFile(ZIP) as z:
+        meta = z.read("META-INF/com/android/metadata").decode(errors="replace")
+        script = z.read("META-INF/com/google/android/updater-script").decode(errors="replace")
+        for name in ZIP_MEMBERS:
+            data = z.read(name)
+            blobs[f"zip:{name}"] = data
+            rows.append((f"zip:{name}", ZIP, sha256(data), len(data), describe(data)))
+
+    with tarfile.open(REC_TAR) as t:
+        for name in ("recovery.img", "vbmeta.img"):
+            data = t.extractfile(name).read()
+            blobs[f"tar:{name}"] = data
+            rows.append((f"tar:{name}", REC_TAR, sha256(data), len(data), describe(data)))
+
+    if os.path.exists(THREAD_REC_TAR):
+        with tarfile.open(THREAD_REC_TAR) as t:
+            try:
+                data = t.extractfile("recovery.img").read()
+            except KeyError:
+                data = None
+            if data is not None:
+                blobs["thread:recovery.img"] = data
+                rows.append(("thread:recovery.img", THREAD_REC_TAR, sha256(data), len(data), describe(data)))
+
+    # ---- resolve the recovery identity chain ----
+    tar_rec = blobs.get("tar:recovery.img")
+    zip_rec = blobs.get("zip:recovery.img")
+    thread_rec = blobs.get("thread:recovery.img")
+    if tar_rec is None:
+        identity = "RECOVERY IMAGE MISSING FROM TAR"
+    elif thread_rec is not None and tar_rec == thread_rec:
+        identity = (f"matches the standalone {THREAD_REC_TAR} image; "
+                    + ("also matches" if tar_rec == zip_rec else "does NOT match") + " the LOS zip recovery.img")
+    elif tar_rec == zip_rec:
+        identity = "matches the LOS zip recovery.img"
+    else:
+        identity = "UNRESOLVED — matches no known source image; DO NOT USE as Lineage-recovery compatibility evidence"
+
+    # ---- ROM-stated expectations (source-cited) ----
+    post_build = re.search(r"^post-build=(.+)$", meta, re.M)
+    post_device = re.search(r"^pre-device=(.+)$", meta, re.M)
+    sdk = re.search(r"^post-sdk-level=(.+)$", meta, re.M)
+    writes = re.findall(r'package_extract_file\("([^"]+)", "([^"]+)"\)', script)
+    blocks = re.findall(r'block_image_update\(map_partition\("([^"]+)"\)', script)
+
+    def fmt(info):
+        return ", ".join(f"{k}={v}" for k, v in info.items())
+
+    lines = []
+    lines.append("# Recovery provenance manifest (read-only)\n")
+    lines.append("Generated by `make_recovery_manifest.py`. This file records provenance and "
+                 "ROM-stated expectations only; it makes no runtime-compatibility claim.\n")
+    lines.append("## Images\n")
+    lines.append("| id | source container | sha256 | bytes | header |")
+    lines.append("|---|---|---|---|---|")
+    for rid, src, h, n, info in rows:
+        lines.append(f"| `{rid}` | `{src}` | `{h}` | {n} | {fmt(info)} |")
+    lines.append("")
+    lines.append("## Recovery identity resolution\n")
+    lines.append(f"- `tar:recovery.img` vs `zip:recovery.img`: **{identity}**")
+    lines.append(f"- tar recovery sha256: `{sha256(tar_rec) if tar_rec else 'n/a'}`")
+    lines.append(f"- zip recovery sha256: `{sha256(zip_rec) if zip_rec else 'n/a'}`")
+    if thread_rec is not None:
+        lines.append(f"- thread recovery sha256: `{sha256(thread_rec)}`")
+    lines.append("")
+    lines.append("## ROM-stated flash expectations (each claim source-cited)\n")
+    lines.append("Source: `META-INF/com/android/metadata` inside the LOS zip.")
+    if post_device:
+        lines.append(f"- Device: `{post_device.group(1)}`")
+    if post_build:
+        lines.append(f"- Build base fingerprint (`post-build`): `{post_build.group(1)}`")
+    if sdk:
+        lines.append(f"- SDK level: `{sdk.group(1)}`")
+    lines.append("Source: `META-INF/com/google/android/updater-script` inside the LOS zip.")
+    for what, dest in writes:
+        lines.append(f"- Writes `{what}` to `{dest}` during ROM install")
+    for part in blocks:
+        lines.append(f"- Block-updates logical partition `{part}`")
+    lines.append("")
+    lines.append("## Open items\n")
+    lines.append("- The tar recovery's origin is stated above; until it resolves to a known "
+                 "source, it must not be used as evidence that Lineage recovery is compatible.")
+    lines.append("- Runtime pairing of this recovery with the ROM is not established by this file.")
+
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"wrote {OUT}")
+    print(f"recovery identity: {identity}")
+
+
+if __name__ == "__main__":
+    main()

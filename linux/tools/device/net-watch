@@ -1,0 +1,168 @@
+#!/system/bin/sh
+# r9s-linux network watcher
+#
+# The USB-C port is one role at a time. Attaching a hub turns the phone into a
+# USB host: USB adb disappears and a USB Ethernet device appears in its place.
+# This watcher waits for that netdev and configures it, so the server reaches
+# the wire with no manual step and recovers by itself when the hub is replugged.
+#
+# It runs in the recovery mount namespace. The network namespace is shared with
+# the Linux root (linux-launch unshares PID and mount only), so the address
+# applies on both sides and sshd answers on it unchanged.
+#
+# Configuration: /data/linux/net.conf, optional. Absent means DHCP.
+#
+#   ADDR=192.0.2.10/24      static address (documentation range)
+#   GW=192.0.2.1             default route
+#   DNS=192.0.2.1            written to <root>/etc/resolv.conf
+#
+# The file is read, not sourced, and takes effect on the next plug or boot, so
+# changing the address needs no image rebuild. If the static configuration
+# fails, this falls back to DHCP rather than leaving the box unreachable.
+#
+# Once the link is configured the clock is set from NTP and committed to the RTC.
+# The RTC reads 2020-01-01 on a cold boot and the root has no time daemon, so
+# without this apt and every TLS client refuse to work.
+#
+# Logs into the launcher's log, so "r9s-server logs" shows it.
+
+DATA=/dev/block/by-name/userdata
+ROOT=/data/linux/data/debian
+LOG=/data/r9s-linux.log
+CFG=${CFG:-/data/linux/net.conf}
+
+log() { echo "$(date -u +%H:%M:%S 2>/dev/null) net: $*" >> "$LOG"; }
+
+mkdir -p /data 2>/dev/null
+grep -q " /data f2fs " /proc/mounts 2>/dev/null || mount -t f2fs "$DATA" /data 2>/dev/null
+
+# Probe by running the binary inside the root, not with -x from outside: Debian
+# ships /sbin/ip -> /bin/ip as an absolute symlink, so from here it would resolve
+# against the recovery's /bin and look missing even though it is installed.
+ipb=""
+for p in /sbin/ip /usr/sbin/ip /bin/ip /usr/bin/ip; do
+    chroot "$ROOT" "$p" -V >/dev/null 2>&1 && { ipb=$p; break; }
+done
+dhb=""
+for p in /sbin/dhclient /usr/sbin/dhclient; do
+    chroot "$ROOT" "$p" --version >/dev/null 2>&1 && { dhb=$p; break; }
+done
+chronydb=""
+for p in /usr/sbin/chronyd /sbin/chronyd; do
+    chroot "$ROOT" "$p" -v >/dev/null 2>&1 && { chronydb=$p; break; }
+done
+hwclockb=""
+for p in /usr/sbin/hwclock /sbin/hwclock; do
+    chroot "$ROOT" "$p" --version >/dev/null 2>&1 && { hwclockb=$p; break; }
+done
+
+# The clock is kernel-wide, so setting it here also sets it for the Linux root.
+# hwclock -w stores it in the PMIC RTC, which otherwise reads 2020-01-01 at boot.
+sync_time() {
+    [ -n "$chronydb" ] || return 0
+    log "setting clock from ntp"
+    if timeout 40 chroot "$ROOT" "$chronydb" -q "pool pool.ntp.org iburst" >>"$LOG" 2>&1; then
+        now=$(chroot "$ROOT" date "+%Y-%m-%d %H:%M:%S %Z" 2>/dev/null)
+        log "clock is $now"
+        if [ -n "$hwclockb" ]; then
+            timeout 10 chroot "$ROOT" "$hwclockb" -w >>"$LOG" 2>&1 &&
+                log "clock written to the rtc" || log "could not write the rtc"
+        fi
+    else
+        log "ntp sync failed; clock left alone"
+    fi
+}
+
+ADDR=""
+GW=""
+DNS=""
+if [ -r "$CFG" ]; then
+    ADDR=$(grep -m1 '^ADDR=' "$CFG" 2>/dev/null | cut -d= -f2-)
+    GW=$(grep -m1 '^GW=' "$CFG" 2>/dev/null | cut -d= -f2-)
+    DNS=$(grep -m1 '^DNS=' "$CFG" 2>/dev/null | cut -d= -f2-)
+fi
+
+if [ -n "$ADDR" ] && [ -z "$ipb" ]; then
+    log "$CFG asks for static $ADDR but $ROOT has no iproute2; left unconfigured"
+    exit 0
+fi
+if [ -z "$ADDR" ] && [ -z "$dhb" ]; then
+    log "no dhclient in $ROOT and no $CFG; Ethernet left unconfigured"
+    exit 0
+fi
+
+if [ -n "$ADDR" ]; then
+    log "static $ADDR gateway ${GW:-none} dns ${DNS:-none}"
+else
+    log "watching for a USB Ethernet device, DHCP"
+fi
+
+while :; do
+    iface=""
+    while [ -z "$iface" ]; do
+        for n in /sys/class/net/eth*; do
+            [ -e "$n" ] || continue
+            iface=${n##*/}
+            break
+        done
+        [ -n "$iface" ] || sleep 2
+    done
+
+    log "$iface appeared"
+    dhpid=""
+    fallback=0
+
+    if [ -n "$ADDR" ]; then
+        if chroot "$ROOT" "$ipb" link set dev "$iface" up >>"$LOG" 2>&1 &&
+           chroot "$ROOT" "$ipb" addr replace "$ADDR" dev "$iface" >>"$LOG" 2>&1; then
+            if [ -n "$GW" ]; then
+                chroot "$ROOT" "$ipb" route replace default via "$GW" dev "$iface" >>"$LOG" 2>&1 ||
+                    log "default route via $GW failed"
+            fi
+            [ -n "$DNS" ] && printf 'nameserver %s\n' "$DNS" > "$ROOT/etc/resolv.conf"
+            chroot "$ROOT" "$ipb" -br addr show "$iface" >>"$LOG" 2>&1
+        else
+            log "static $ADDR failed on $iface"
+            fallback=1
+        fi
+    fi
+
+    if [ -z "$ADDR" ] || [ "$fallback" = 1 ]; then
+        if [ -n "$dhb" ]; then
+            [ -z "$fallback" ] || log "falling back to DHCP"
+            [ -n "$ipb" ] && chroot "$ROOT" "$ipb" link set dev "$iface" up >>"$LOG" 2>&1
+            # -d keeps the client in the foreground so this script owns its
+            # lifetime; it renews the lease while the interface exists.
+            chroot "$ROOT" "$dhb" -d -pf "/run/dhclient.$iface.pid" "$iface" >>"$LOG" 2>&1 &
+            dhpid=$!
+        else
+            log "static failed and no dhclient to fall back to"
+        fi
+    fi
+
+    # A static address is already up; a DHCP lease arrives in the background, so
+    # wait until the interface carries one before the ntp lookup.
+    if [ -n "$ADDR" ] && [ "$fallback" = 0 ]; then
+        :
+    elif [ -n "$ipb" ]; then
+        i=0
+        while [ "$i" -lt 20 ]; do
+            chroot "$ROOT" "$ipb" -br addr show "$iface" 2>/dev/null | grep -q "inet " && break
+            i=$((i + 1))
+            sleep 1
+        done
+    else
+        sleep 5
+    fi
+    sync_time
+
+    while [ -e "/sys/class/net/$iface" ]; do
+        sleep 2
+    done
+
+    log "$iface removed"
+    if [ -n "$dhpid" ]; then
+        kill "$dhpid" 2>/dev/null
+        wait "$dhpid" 2>/dev/null
+    fi
+done

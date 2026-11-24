@@ -1,0 +1,40 @@
+#!/system/bin/sh
+# r9s-linux charge guard
+#
+# Holds the battery under a ceiling and resumes below a floor. The gating node
+# was determined by measurement on this device: writing 0 to charging_enabled
+# moves the pack to Discharging (-142 mA); writing 1 resumes charging.
+#
+# Fails safe: if the battery node cannot be read, charging is left enabled.
+# state is not persisted; a reboot returns the kernel default (charging on).
+
+BAT=${BAT:-/sys/class/power_supply/battery}
+CEIL=${CEIL:-80}
+FLOOR=${FLOOR:-75}
+POLL=${POLL:-60}
+LOG=${LOG:-/data/r9s-linux-charge.log}
+
+log() { echo "$(date -u +%H:%M:%S 2>/dev/null) $*" >> "$LOG"; }
+
+# kernel-level backstop: Samsung's own cap, independent of this loop
+[ -w "$BAT/batt_swelling_control" ] && echo 1 > "$BAT/batt_swelling_control" 2>/dev/null
+log "started: ceiling $CEIL floor $FLOOR poll ${POLL}s"
+
+state=on
+while :; do
+    cap=$(cat "$BAT/capacity" 2>/dev/null)
+    case "$cap" in
+        ''|*[!0-9]*)
+            sleep "$POLL"; continue ;;
+    esac
+
+    if [ "$state" = on ] && [ "$cap" -ge "$CEIL" ]; then
+        echo 0 > "$BAT/charging_enabled" 2>/dev/null && state=off
+        log "capacity $cap >= $CEIL -> charging off"
+    elif [ "$state" = off ] && [ "$cap" -le "$FLOOR" ]; then
+        echo 1 > "$BAT/charging_enabled" 2>/dev/null && state=on
+        log "capacity $cap <= $FLOOR -> charging on"
+    fi
+
+    sleep "$POLL"
+done
